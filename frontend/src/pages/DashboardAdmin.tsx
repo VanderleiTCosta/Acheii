@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { 
     Loader2, CheckCircle, XCircle, 
-    Search, Store, Package, X, Trash2, Ban, Eye, Car, DollarSign, ShieldCheck
+    Search, Store, Package, X, Trash2, Eye, Car, DollarSign, ShieldCheck
 } from 'lucide-react'; 
 import axios from 'axios';
 import Sidebar from '../components/Sidebar';
@@ -78,11 +78,6 @@ const DashboardAdmin = () => {
             alert("Erro ao excluir produto.");
             console.error("Erro ao excluir produto:", error);
         }
-    };
-
-    const handleOpenBlockModal = (product: Product) => {
-        setSelectedProduct(product);
-        setIsRejectModalOpen(true);
     };
 
     const confirmBlockAction = async () => {
@@ -197,7 +192,6 @@ const DashboardAdmin = () => {
                                                     <div className="flex justify-end gap-2">
                                                         {/* BOTÕES SEMPRE VISÍVEIS */}
                                                         <button onClick={() => setSelectedProduct(p)} title="Ver Detalhes" className="p-2 bg-slate-100 text-slate-500 rounded-lg hover:bg-brand-dark hover:text-white transition-all"><Eye size={14}/></button>
-                                                        <button onClick={() => handleOpenBlockModal(p)} title="Bloquear" className="p-2 bg-amber-50 text-amber-600 rounded-lg hover:bg-amber-500 hover:text-white transition-all"><Ban size={14}/></button>
                                                         <button onClick={() => handleDeleteProduct(p.id)} title="Excluir" className="p-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-500 hover:text-white transition-all"><Trash2 size={14}/></button>
                                                     </div>
                                                 </td>
@@ -230,7 +224,6 @@ const DashboardAdmin = () => {
                             <DetailItem icon={<ShieldCheck className="text-purple-500"/>} label="Condição" value={selectedProduct.condition_type === 'new' ? 'Nova' : 'Usada'} />
                         </div>
                         <div className="flex gap-4">
-                            <button onClick={() => handleOpenBlockModal(selectedProduct)} className="flex-1 py-4 bg-amber-500 text-white rounded-2xl font-black uppercase tracking-widest hover:brightness-110 transition-all">Bloquear Peça</button>
                             <button onClick={() => handleDeleteProduct(selectedProduct.id)} className="flex-1 py-4 bg-red-500 text-white rounded-2xl font-black uppercase tracking-widest hover:brightness-110 transition-all">Excluir Produto</button>
                         </div>
                     </div>

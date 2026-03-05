@@ -132,22 +132,6 @@ app.get("/api/admin/active-stores", async (req, res) => {
   }
 });
 
-// // Alterar status da loja (Ativar/Bloquear)
-// app.patch('/api/admin/validate-product/:id', async (req, res) => {
-//     const { id } = req.params;
-//     const { status, issue } = req.body; 
-//     try {
-//         // Ao atualizar, o 'updated_at' mudará automaticamente para agora
-//         await db.execute(
-//             'UPDATE products SET status = ?, validation_issue = ? WHERE id = ?', 
-//             [status, issue || null, id]
-//         );
-//         res.json({ message: "Validação concluída com sucesso." });
-//     } catch (error) {
-//         res.status(500).json({ message: "Erro na validação do banco." });
-//     }
-// });
-
 // Listar produtos aguardando revisão
 app.get('/api/admin/pending-products', async (req, res) => {
     try {
@@ -174,20 +158,6 @@ app.get('/api/admin/pending-products', async (req, res) => {
     }
 });
 
-// // Aprovar ou Rejeitar produto
-// app.patch("/api/admin/validate-product/:id", async (req, res) => {
-//   const { id } = req.params;
-//   const { status, issue } = req.body; // status: 'approved' | 'rejected'
-//   try {
-//     await db.execute(
-//       "UPDATE products SET status = ?, validation_issue = ? WHERE id = ?",
-//       [status, issue || null, id],
-//     );
-//     res.json({ message: "Validação concluída." });
-//   } catch (error) {
-//     res.status(500).json({ message: "Erro na validação." });
-//   }
-// });
 
 // Buscar resumo de validações do dia atual
 app.get('/api/admin/validation-stats', async (req, res) => {
@@ -324,10 +294,10 @@ app.post("/api/store/products", async (req, res) => {
   const { user_id, name, vehicle, condition_type, stock, price } = req.body;
   try {
     await db.execute(
-      'INSERT INTO products (user_id, name, vehicle, condition_type, stock, price, status) VALUES (?, ?, ?, ?, ?, ?, "pending")',
+      'INSERT INTO products (user_id, name, vehicle, condition_type, stock, price, status) VALUES (?, ?, ?, ?, ?, ?, "active")',
       [user_id, name, vehicle, condition_type, stock, price],
     );
-    res.json({ message: "Produto cadastrado e enviado para validação!" });
+    res.json({ message: "Produto publicado com sucesso no marketplace!" });
   } catch (error) {
     res.status(500).json({ message: "Erro ao cadastrar produto." });
   }
@@ -350,10 +320,10 @@ app.put("/api/store/products/:id", async (req, res) => {
   const { name, vehicle, stock, price, condition_type } = req.body;
   try {
     await db.execute(
-      'UPDATE products SET name = ?, vehicle = ?, stock = ?, price = ?, condition_type = ?, status = "pending" WHERE id = ?',
+      'UPDATE products SET name = ?, vehicle = ?, stock = ?, price = ?, condition_type = ?, status = "active" WHERE id = ?',
       [name, vehicle, stock, price, condition_type, id],
     );
-    res.json({ message: "Produto atualizado e enviado para revalidação!" });
+    res.json({ message: "Produto atualizado e publicado no marketplace!" });
   } catch (error) {
     res.status(500).json({ error: "Erro ao atualizar produto" });
   }
@@ -371,22 +341,6 @@ app.get('/api/admin/active-products', async (req, res) => {
         res.json(rows);
     } catch (error) {
         res.status(500).json({ message: "Erro ao buscar produtos ativos" });
-    }
-});
-
-// Rota de Validação Atualizada (Suporta Motivo de Rejeição)
-app.patch('/api/admin/validate-product/:id', async (req, res) => {
-    const { id } = req.params;
-    const { status, issue } = req.body; 
-    try {
-        await db.execute(
-            'UPDATE products SET status = ?, validation_issue = ?, updated_at = NOW() WHERE id = ?', 
-            [status, issue || 'OK', id]
-        );
-        res.json({ message: "Status atualizado com sucesso" });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: "Erro ao processar validação" });
     }
 });
 

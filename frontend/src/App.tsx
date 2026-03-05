@@ -5,7 +5,6 @@ import { ProtectedRoute } from './components/ProtectedRoute';
 import Dashboard from './pages/Dashboard';
 import DashboardAdmin from './pages/DashboardAdmin';
 import GestaoLojas from './components/GestaoLojas';
-import ValidacaoProdutos from './components/ValidacaoProdutos';
 import MonitoramentoIA from './components/MonitoramentoIA';
 import RelatorioFinanceiro from './components/RelatorioFinanceiro';
 import Estoque from './components/Estoque';
@@ -34,15 +33,6 @@ function App() {
           element={
             <ProtectedRoute allowedRoles={['admin']}> 
               <GestaoLojas />
-            </ProtectedRoute>
-          } 
-        />
-
-        <Route 
-          path="/validacao-produtos" 
-          element={
-            <ProtectedRoute allowedRoles={['admin']}> 
-              <ValidacaoProdutos />
             </ProtectedRoute>
           } 
         />

@@ -1,4 +1,4 @@
-import { ShieldCheck, Users, BarChart3,FileText, LogOut, CheckCircle, LayoutDashboard, Monitor, Package } from 'lucide-react';
+import { ShieldCheck, Users, BarChart3,FileText, LogOut, LayoutDashboard, Monitor, Package } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
 
 interface SidebarProps {
@@ -44,9 +44,6 @@ const Sidebar = ({ role }: SidebarProps) => {
                         </button>
                         <button onClick={() => navigate('/gestao-lojas')} className={`${btnBase} ${isActive('/gestao-lojas') ? btnActive : btnInactive}`}>
                             <Users size={18} /> Gestão de Lojas
-                        </button>
-                        <button onClick={() => navigate('/validacao-produtos')} className={`${btnBase} ${isActive('/validacao-produtos') ? btnActive : btnInactive}`}>
-                            <CheckCircle size={18} /> Validação de Produtos
                         </button>
                         <button onClick={() => navigate('/monitoramento-ia')} className={`${btnBase} ${isActive('/monitoramento-ia') ? btnActive : btnInactive}`}>
                             <Monitor size={18} /> Monitoramento IA

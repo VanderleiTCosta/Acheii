@@ -119,7 +119,6 @@ const Estoque = () => {
           ...formData,
           user_id: userId,
         });
-        alert("Produto enviado para validação!");
       }
       setIsModalOpen(false);
       fetchEstoque(); 
