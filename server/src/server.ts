@@ -7,383 +7,267 @@ import { authorize } from "./middlewares/auth";
 import { RowDataPacket } from "mysql2";
 import { getStoreContext } from './ragEngine';
 
+// Importação segura para gerar UUIDs
+const { v4: uuidv4 } = require("uuid"); 
+
 const app = express();
 app.use(cors());
-app.use(express.json());
 
-// ROTA DE LOGIN
+// --- CONFIGURAÇÃO DE LIMITE DE PAYLOAD (Resolve Erro 413) ---
+// Definido para 50mb para suportar imagens em Base64 vindas do Estoque.tsx
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// --- LOGIN HÍBRIDO (ADM em USERS + LOJISTA em LOJAS) ---
 app.post("/api/login", async (req, res) => {
-  const { email, password } = req.body;
+    const { email, password } = req.body;
+    try {
+        const [adminRows]: any = await db.execute("SELECT * FROM users WHERE email = ?", [email]);
+        let userData = adminRows[0];
+        let role = 'admin';
 
-  try {
-    const [rows]: any = await db.execute(
-      "SELECT * FROM users WHERE email = ?",
-      [email],
-    );
-    const user = rows[0];
+        if (!userData) {
+            const [lojaRows]: any = await db.execute("SELECT * FROM lojas WHERE email = ?", [email]);
+            userData = lojaRows[0];
+            role = 'user';
+        }
 
-    if (!user || !(await bcrypt.compare(password, user.password))) {
-      return res.status(401).json({ message: "Credenciais incorretas" });
+        if (!userData || !(await bcrypt.compare(password, userData.password))) {
+            return res.status(401).json({ message: "Credenciais incorretas" });
+        }
+
+        if (role === 'user' && userData.status === 'inativo') {
+            return res.status(403).json({ message: "Sua conta aguarda aprovação administrativa." });
+        }
+
+        const id = role === 'admin' ? userData.id : userData.id_loja;
+        const name = role === 'admin' ? userData.name : userData.nome_fantasia;
+        const token = jwt.sign({ id, role }, process.env.JWT_SECRET || "chave_acheii", { expiresIn: "24h" });
+
+        res.json({ token, user: { id, name, role } });
+    } catch (error) {
+        res.status(500).json({ error: "Erro interno no servidor" });
     }
-
-    // Regra: Lojistas precisam de aprovação prévia do Admin
-    if (user.role !== "admin" && user.status === "pending") {
-      return res.status(403).json({
-        message: "Sua conta de lojista ainda está em análise técnica.",
-      });
-    }
-
-    const token = jwt.sign(
-      { id: user.id, role: user.role },
-      process.env.JWT_SECRET || "chave_acheii",
-      { expiresIn: "24h" },
-    );
-
-    // RETORNO COM ID: Essencial para o funcionamento do Estoque
-    res.json({
-      token,
-      user: {
-        id: user.id,
-        name: user.name,
-        role: user.role,
-      },
-    });
-  } catch (error) {
-    console.error("Erro no login:", error);
-    res.status(500).json({ error: "Erro interno no servidor" });
-  }
-});
-
-app.post("/api/register", authorize(["admin"]), async (req, res) => {
-  const { name, email, password, role } = req.body;
-
-  // Validação extra por segurança
-  if (!["admin", "user"].includes(role)) {
-    return res.status(400).json({ message: "Cargo inválido." });
-  }
-
-  try {
-    const hashedPassword = await bcrypt.hash(password, 12);
-    await db.execute(
-      "INSERT INTO users (name, email, password, role) VALUES (?, ?, ?, ?)",
-      [name, email, hashedPassword, role],
-    );
-    res.status(201).json({ message: "Usuário registrado com sucesso!" });
-  } catch (error) {
-    res.status(400).json({ message: "Este e-mail já está em uso." });
-  }
 });
 
 app.post("/api/register-public", async (req, res) => {
-  const { name, email, password, condition_type, sector } = req.body;
+  const { 
+    name, email, password, whatsapp, cnpj, 
+    razao_social, endereco, cidade, estado,
+    latitude, longitude 
+  } = req.body;
+  
+  const id_loja = uuidv4();
 
   try {
     const hashedPassword = await bcrypt.hash(password, 12);
 
-    // Note que o status é 'pending' por padrão para lojas novas
     await db.execute(
-      'INSERT INTO users (name, email, password, role, status, condition_type, sector, is_approved) VALUES (?, ?, ?, "user", "pending", ?, ?, FALSE)',
-      [name, email, hashedPassword, condition_type, sector],
+      `INSERT INTO lojas 
+      (id_loja, nome_fantasia, razao_social, CNPJ, whatsapp, endereco, cidade, estado, latitude, longitude, email, password, status, plano) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'inativo', 'basico')`,
+      [
+        id_loja, name, razao_social || name, cnpj, whatsapp, 
+        endereco || null, cidade || null, estado || null,
+        latitude || 0.000000, longitude || 0.000000, 
+        email, hashedPassword
+      ]
     );
 
-    res.status(201).json({ message: "Solicitação enviada com sucesso!" });
-  } catch (error) {
-    console.error(error);
-    res
-      .status(400)
-      .json({ message: "Erro ao cadastrar. Verifique se o e-mail já existe." });
+    res.status(201).json({ message: "Solicitação enviada com sucesso! Aguarde aprovação." });
+  } catch (error: any) {
+    console.error("Erro no registro:", error);
+    if (error.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({ message: "E-mail ou CNPJ já cadastrado." });
+    }
+    res.status(500).json({ message: "Erro interno ao processar cadastro." });
   }
 });
+
+// --- ROTAS ADMINISTRATIVAS ---
 
 app.get("/api/admin/pending-stores", async (req, res) => {
-  try {
-    const [rows] = await db.execute(
-      'SELECT id, name, email, sector, condition_type FROM users WHERE status = "pending" AND role = "user"',
-    );
-    res.json(rows);
-  } catch (error) {
-    res.status(500).json({ message: "Erro ao buscar lojas." });
-  }
-});
-
-// Aprovar uma loja
-app.post("/api/admin/approve-store/:id", async (req, res) => {
-  const { id } = req.params;
-  try {
-    await db.execute(
-      'UPDATE users SET status = "active", is_approved = TRUE WHERE id = ?',
-      [id],
-    );
-    res.json({ message: "Loja aprovada com sucesso!" });
-  } catch (error) {
-    res.status(500).json({ message: "Erro ao aprovar loja." });
-  }
-});
-
-// Listar todas as lojas ativas (Aprovadas)
-app.get("/api/admin/active-stores", async (req, res) => {
-  try {
-    const [rows] = await db.execute(
-      'SELECT id, name, email, sector, status FROM users WHERE role = "user" AND status != "pending"',
-    );
-    res.json(rows);
-  } catch (error) {
-    res.status(500).json({ message: "Erro ao listar lojas." });
-  }
-});
-
-// Listar produtos aguardando revisão
-app.get('/api/admin/pending-products', async (req, res) => {
     try {
-        // Selecionamos explicitamente os campos para evitar erros de nulo
-        const [rows] = await db.execute(`
+        const [rows] = await db.execute(
+            'SELECT id_loja as id, nome_fantasia as name, CNPJ as sector FROM lojas WHERE status = "inativo"'
+        );
+        res.json(rows);
+    } catch (error) {
+        res.status(500).json({ message: "Erro ao buscar lojas pendentes" });
+    }
+});
+
+app.get("/api/admin/active-stores", async (req, res) => {
+    try {
+        const [rows] = await db.execute(
+            'SELECT id_loja as id, nome_fantasia as name, email, whatsapp, status, plano FROM lojas'
+        );
+        res.json(rows);
+    } catch (error) {
+        res.status(500).json({ message: "Erro ao listar lojas" });
+    }
+});
+
+app.get('/api/admin/validation-stats', async (req, res) => {
+    try {
+        const [approved] = await db.execute<RowDataPacket[]>('SELECT COUNT(*) as total FROM PRODUTOS WHERE status = "active"');
+        res.json({ approvedToday: approved[0].total, rejectedToday: 0 });
+    } catch (error) {
+        res.status(500).json({ message: "Erro ao carregar estatísticas" });
+    }
+});
+
+app.get('/api/admin/active-products', async (req, res) => {
+    try {
+        const [rows]: any = await db.execute(`
             SELECT 
-                p.id, 
-                p.name, 
-                p.vehicle, 
-                p.price, 
-                p.stock, 
-                p.condition_type, 
-                p.status, 
-                u.name as store_name 
-            FROM products p 
-            JOIN users u ON p.user_id = u.id 
-            WHERE p.status = 'pending'
-            ORDER BY p.created_at DESC
+                p.id_produto as id, 
+                p.nome_peca as name, 
+                l.nome_fantasia as store_name, 
+                p.marca_veiculo as vehicle, 
+                p.modelo_veiculo,
+                p.ano_inicio,
+                p.ano_fim,
+                p.preco as price, 
+                p.quantidade as stock, 
+                p.condicao as condition_type, 
+                p.fotos,
+                p.aplicacao_veiculo,
+                p.codigo_interno,
+                p.motivo_bloqueio,
+                p.status 
+            FROM PRODUTOS p 
+            INNER JOIN lojas l ON p.id_loja = l.id_loja 
+            ORDER BY p.data_atualizacao DESC
         `);
         res.json(rows);
     } catch (error) {
-        console.error("Erro ao buscar produtos:", error);
-        res.status(500).json({ message: "Erro ao buscar produtos." });
+        res.status(500).json({ message: "Erro ao buscar produtos" });
     }
 });
 
+app.patch("/api/admin/validate-product/:id", async (req, res) => {
+    const { id } = req.params;
+    const { status, issue } = req.body;
 
-// Buscar resumo de validações do dia atual
-app.get('/api/admin/validation-stats', async (req, res) => {
     try {
-        // Conta aprovados hoje (status 'active' com data de hoje)
-        const [approved] = await db.execute<RowDataPacket[]>(
-            'SELECT COUNT(*) as total FROM products WHERE status = "active" AND DATE(updated_at) = CURDATE()'
+        // Agora salvamos no campo específico 'motivo_bloqueio'
+        await db.execute(
+            "UPDATE PRODUTOS SET status = ?, motivo_bloqueio = ? WHERE id_produto = ?",
+            [status, issue || null, id]
         );
-
-        // Conta rejeitados hoje (status 'rejected' com data de hoje)
-        const [rejected] = await db.execute<RowDataPacket[]>(
-            'SELECT COUNT(*) as total FROM products WHERE status = "rejected" AND DATE(updated_at) = CURDATE()'
-        );
-
-        res.json({
-            approvedToday: approved[0].total,
-            rejectedToday: rejected[0].total
-        });
+        res.json({ message: "Produto bloqueado com sucesso!" });
     } catch (error) {
-        res.status(500).json({ message: "Erro ao carregar estatísticas diárias." });
+        res.status(500).json({ error: "Erro interno no servidor." });
     }
 });
 
-// Buscar estatísticas gerais da IA
-app.get("/api/admin/ai-stats", async (req, res) => {
+// --- ROTAS DE LOJISTA (ESTOQUE) ---
+
+app.get("/api/store/products/:userId", async (req, res) => {
+    try {
+        const [rows] = await db.execute("SELECT * FROM PRODUTOS WHERE id_loja = ?", [req.params.userId]);
+        res.json(rows);
+    } catch (error) {
+        res.status(500).json({ message: "Erro ao carregar estoque" });
+    }
+});
+
+// FIX FINAL: Ordem sincronizada e tratamento de fotos LONGTEXT/Base64
+app.post("/api/store/products", async (req, res) => {
+  const { 
+    user_id, nome_peca, fabricante, categoria, 
+    codigo_interno, aplicacao_veiculo, marca_veiculo, 
+    modelo_veiculo, ano_inicio, ano_fim, quantidade, 
+    preco, fotos, condicao 
+  } = req.body;
+
+  const id_produto = uuidv4(); 
+
   try {
-    // Exemplo de dados agregados para os cards superiores
-    res.json({
-      accuracy: "94.2%",
-      avgTime: "0.8s",
-      failures: 290,
-    });
+    // Sanitização para Base64: se for string curta ou inválida, vai como NULL
+    const fotoData = fotos && fotos.length > 15 ? fotos : null;
+
+    await db.execute(
+      `INSERT INTO PRODUTOS 
+      (id_produto, id_loja, nome_peca, fabricante, categoria, codigo_interno, aplicacao_veiculo, marca_veiculo, modelo_veiculo, ano_inicio, ano_fim, quantidade, preco, fotos, status, condicao) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+      [
+        id_produto, user_id, nome_peca, fabricante, categoria, 
+        codigo_interno || null, aplicacao_veiculo || null, 
+        marca_veiculo, modelo_veiculo, Number(ano_inicio), Number(ano_fim), 
+        Number(quantidade), Number(preco), fotoData, condicao || 'nova'
+      ]
+    );
+    res.status(201).json({ message: "Produto cadastrado!" });
   } catch (error) {
-    res.status(500).json({ message: "Erro ao buscar estatísticas." });
+    console.error("ERRO NO POST:", error);
+    res.status(500).json({ error: "Erro ao inserir produto. Verifique se a coluna fotos é LONGTEXT." });
   }
 });
 
-// Buscar logs de interpretação recentes
-app.get("/api/admin/ai-logs", async (req, res) => {
+app.put("/api/store/products/:id", async (req, res) => {
+  const { id } = req.params;
+  const { 
+    nome_peca, fabricante, categoria, codigo_interno, 
+    aplicacao_veiculo, marca_veiculo, modelo_veiculo, 
+    ano_inicio, ano_fim, quantidade, preco, fotos, condicao 
+  } = req.body;
+
   try {
-    const logs = [
-      {
-        query: "tem bomba de combustivel do siena 2012?",
-        tags: ["Bomba de Combustível", "Fiat Siena", "2012"],
-        results: 3,
-        time: "0.8s",
-      },
-      {
-        query: "pastilha freio civic 19",
-        tags: ["Pastilha de Freio", "Honda Civic", "2019"],
-        results: 5,
-        time: "0.6s",
-      },
-    ];
-    res.json(logs);
+    const fotoData = fotos && fotos.length > 15 ? fotos : null;
+
+    const query = `
+      UPDATE PRODUTOS SET 
+        nome_peca = ?, fabricante = ?, categoria = ?, codigo_interno = ?, 
+        aplicacao_veiculo = ?, marca_veiculo = ?, modelo_veiculo = ?, 
+        ano_inicio = ?, ano_fim = ?, quantidade = ?, preco = ?, 
+        fotos = ?, condicao = ?
+      WHERE id_produto = ?`;
+
+    await db.execute(query, [
+      nome_peca, fabricante, categoria, codigo_interno || null, 
+      aplicacao_veiculo || null, marca_veiculo, modelo_veiculo, 
+      Number(ano_inicio), Number(ano_fim), Number(quantidade), 
+      Number(preco), fotoData, condicao || 'nova', id
+    ]);
+
+    res.json({ message: "Produto atualizado!" });
   } catch (error) {
-    res.status(500).json({ message: "Erro ao buscar logs." });
+    console.error("ERRO NO UPDATE:", error);
+    res.status(500).json({ error: "Erro ao atualizar no banco de dados." });
   }
 });
 
-// Buscar dados financeiros consolidados
-app.get("/api/admin/financial-stats", async (req, res) => {
-  try {
-    // Exemplo de retorno baseado no seu mockup
-    res.json({
-      totalRevenue: "R$ 114.700,00",
-      projection: "R$ 185.000,00",
-      averageTicket: "R$ 755,00/mes",
-      plans: { premium: 48, basic: 104 },
-    });
-  } catch (error) {
-    res.status(500).json({ message: "Erro ao buscar dados financeiros." });
-  }
+app.delete("/api/store/products/:id", async (req, res) => {
+    try {
+        await db.execute("DELETE FROM PRODUTOS WHERE id_produto = ?", [req.params.id]);
+        res.json({ message: "Produto removido!" });
+    } catch (error) {
+        res.status(500).json({ error: "Erro ao deletar" });
+    }
 });
 
-// Listar comissões por loja
-app.get("/api/admin/commissions", async (req, res) => {
-  try {
-    const [rows] = await db.execute(`
-            SELECT u.name as store, 'Premium' as plan, 120 as sales, 'R$ 1.800,00' as commission
-            FROM users u WHERE role = 'user' AND status = 'active'
-        `);
-    res.json(rows);
-  } catch (error) {
-    res.status(500).json({ message: "Erro ao buscar comissões." });
-  }
-});
-
-// Buscar métricas resumidas da loja
 app.get("/api/store/metrics/:userId", async (req, res) => {
-  const { userId } = req.params;
   try {
-    // Tipamos explicitamente como RowDataPacket[] para poder acessar o índice [0]
-    const [activeProducts] = await db.execute<RowDataPacket[]>(
-      'SELECT COUNT(*) as total FROM products WHERE user_id = ? AND status = "active"',
-      [userId],
+    const [active]: any = await db.execute(
+      'SELECT COUNT(*) as total FROM PRODUTOS WHERE id_loja = ? AND status = "active"', 
+      [req.params.userId]
     );
-    const [outOfStock] = await db.execute<RowDataPacket[]>(
-      "SELECT COUNT(*) as total FROM products WHERE user_id = ? AND stock = 0",
-      [userId],
+    const [outOfStock]: any = await db.execute(
+      'SELECT COUNT(*) as total FROM PRODUTOS WHERE id_loja = ? AND quantidade = 0', 
+      [req.params.userId]
     );
-
-    res.json({
-      active: activeProducts[0].total, // Resolvido: TypeScript agora reconhece a propriedade 'total'
-      stockAlert: outOfStock[0].total, // Resolvido
-      chatRequests: 47,
-      conversion: "23.5%",
+    
+    res.json({ 
+      active: active[0].total, 
+      stockAlert: outOfStock[0].total, 
+      chatRequests: 0, 
+      conversion: "0%" 
     });
   } catch (error) {
     res.status(500).json({ message: "Erro ao carregar métricas." });
   }
 });
 
-// Listar estoque da loja específica
-app.get("/api/store/products/:userId", async (req, res) => {
-  const { userId } = req.params;
-  console.log("Buscando produtos para o usuário:", userId); // Debug no terminal do Node
-
-  try {
-    const [rows] = await db.execute(
-      "SELECT * FROM products WHERE user_id = ?",
-      [userId],
-    );
-    console.log("Produtos encontrados:", rows);
-    res.json(rows);
-  } catch (error) {
-    console.error("Erro no SQL:", error);
-    res.status(500).json({ message: "Erro interno no servidor" });
-  }
-});
-
-// Cadastrar novo produto
-app.post("/api/store/products", async (req, res) => {
-  const { user_id, name, vehicle, condition_type, stock, price } = req.body;
-  try {
-    await db.execute(
-      'INSERT INTO products (user_id, name, vehicle, condition_type, stock, price, status) VALUES (?, ?, ?, ?, ?, ?, "active")',
-      [user_id, name, vehicle, condition_type, stock, price],
-    );
-    res.json({ message: "Produto publicado com sucesso no marketplace!" });
-  } catch (error) {
-    res.status(500).json({ message: "Erro ao cadastrar produto." });
-  }
-});
-
-// DELETAR PRODUTO
-app.delete("/api/store/products/:id", async (req, res) => {
-  const { id } = req.params;
-  try {
-    await db.execute("DELETE FROM products WHERE id = ?", [id]);
-    res.json({ message: "Produto removido com sucesso!" });
-  } catch (error) {
-    res.status(500).json({ error: "Erro ao deletar produto" });
-  }
-});
-
-// ATUALIZAR PRODUTO
-app.put("/api/store/products/:id", async (req, res) => {
-  const { id } = req.params;
-  const { name, vehicle, stock, price, condition_type } = req.body;
-  try {
-    await db.execute(
-      'UPDATE products SET name = ?, vehicle = ?, stock = ?, price = ?, condition_type = ?, status = "active" WHERE id = ?',
-      [name, vehicle, stock, price, condition_type, id],
-    );
-    res.json({ message: "Produto atualizado e publicado no marketplace!" });
-  } catch (error) {
-    res.status(500).json({ error: "Erro ao atualizar produto" });
-  }
-});
-
-app.get('/api/admin/active-products', async (req, res) => {
-    try {
-        const [rows]: any = await db.execute(`
-            SELECT p.*, u.name as store_name 
-            FROM products p 
-            JOIN users u ON p.user_id = u.id 
-            WHERE p.status = 'active'
-            ORDER BY p.updated_at DESC
-        `);
-        res.json(rows);
-    } catch (error) {
-        res.status(500).json({ message: "Erro ao buscar produtos ativos" });
-    }
-});
-
-app.post('/api/chat/otto', async (req, res) => {
-    const { message } = req.body;
-
-    try {
-        // 1. RAG: Busca peças relevantes no banco de dados
-        const context = await getStoreContext(message);
-
-        // 2. Montagem do Prompt Sênior [cite: 2025-12-05]
-        const systemPrompt = `Você é o Otto, assistente do marketplace Acheii. 
-        Responda apenas com base neste contexto de estoque:
-        ${context}
-        
-        Se não encontrar a peça, peça para o cliente ser mais específico ou diga que não temos no momento.`;
-
-        // 3. Chamada para a IA (Exemplo com Gemini ou OpenAI)
-        // Aqui você insere a chamada real da API. Exemplo simulado:
-        const botReply = "Olá! Encontrei a peça que você precisa no nosso estoque..."; 
-
-        // 4. Salvar log para o Monitoramento IA aparecer dados
-        await db.execute(
-            'INSERT INTO chat_logs (user_message, bot_response, context_used) VALUES (?, ?, ?)',
-            [message, botReply, context]
-        );
-
-        res.json({ reply: botReply });
-    } catch (error) {
-        console.error("Erro no chat do Otto:", error);
-        res.status(500).json({ message: "Erro ao processar conversa." });
-    }
-});
-
-app.get('/api/admin/chat-logs', async (req, res) => {
-    try {
-        const [rows] = await db.execute('SELECT * FROM chat_logs ORDER BY created_at DESC LIMIT 50');
-        res.json(rows);
-    } catch (error) {
-        res.status(500).json({ message: "Erro ao buscar logs." });
-    }
-});
-
-app.listen(3001, () =>
-  console.log("Servidor Acheii Pro rodando na porta 3001"),
-);
+app.listen(3001, () => console.log("Acheii Pro 3.6 - Servidor Otimizado para Imagens (Base64)"));
