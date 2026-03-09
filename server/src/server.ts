@@ -132,6 +132,7 @@ app.get('/api/admin/active-products', async (req, res) => {
                 p.quantidade as stock, 
                 p.condicao as condition_type, 
                 p.fotos,
+                p.categoria, -- ADICIONADO: Agora o banco envia a categoria real
                 p.aplicacao_veiculo,
                 p.codigo_interno,
                 p.motivo_bloqueio,
@@ -142,6 +143,7 @@ app.get('/api/admin/active-products', async (req, res) => {
         `);
         res.json(rows);
     } catch (error) {
+        console.error("Erro ao buscar produtos para o admin:", error);
         res.status(500).json({ message: "Erro ao buscar produtos" });
     }
 });
@@ -151,7 +153,6 @@ app.patch("/api/admin/validate-product/:id", async (req, res) => {
     const { status, issue } = req.body;
 
     try {
-        // Agora salvamos no campo específico 'motivo_bloqueio'
         await db.execute(
             "UPDATE PRODUTOS SET status = ?, motivo_bloqueio = ? WHERE id_produto = ?",
             [status, issue || null, id]
@@ -162,50 +163,118 @@ app.patch("/api/admin/validate-product/:id", async (req, res) => {
     }
 });
 
-// --- ROTAS DE LOJISTA (ESTOQUE) ---
+// --- ROTAS DE LOJISTA (ESTOQUE / MINI-ERP LITE) ---
+
+// PATCH: Ajuste rápido de estoque com reativação automática
+app.patch("/api/store/products/stock/:id", async (req, res) => {
+    const { id } = req.params;
+    const { quantity } = req.body;
+
+    try {
+        const newStock = Math.max(0, Number(quantity));
+
+        // Ao alterar estoque, limpamos bloqueios anteriores para nova revisão
+        const query = `
+            UPDATE PRODUTOS 
+            SET quantidade = ?, 
+                status = 'active', 
+                motivo_bloqueio = NULL 
+            WHERE id_produto = ?`;
+
+        const [result]: any = await db.execute(query, [newStock, id]);
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: "Produto não encontrado." });
+        }
+
+        res.json({ message: "Stock atualizado!", newStock });
+    } catch (error) {
+        console.error("ERRO NO STOCK PATCH:", error);
+        res.status(500).json({ error: "Erro interno ao atualizar stock." });
+    }
+});
+
+// POST: Importação em Massa com SKU e Categoria Dinâmica
+app.post("/api/store/bulk-import", async (req, res) => {
+  const { products } = req.body;
+
+  if (!products || !Array.isArray(products)) {
+      return res.status(400).json({ error: "Dados inválidos para importação." });
+  }
+
+  try {
+    const values = products.map((p: any) => [
+      uuidv4(),
+      p.id_loja,
+      p.nome_peca,
+      p.fabricante,
+      p.categoria || 'Geral',
+      p.codigo_interno || null, // Sincronizado com SKU da planilha
+      p.aplicacao_veiculo || null, 
+      p.marca_veiculo,
+      p.modelo_veiculo,
+      p.ano_inicio || 0,
+      p.ano_fim || 0,
+      p.quantidade || 0,
+      p.preco || 0,
+      'active'
+    ]);
+
+    const sql = `
+      INSERT INTO PRODUTOS 
+      (id_produto, id_loja, nome_peca, fabricante, categoria, codigo_interno, 
+       aplicacao_veiculo, marca_veiculo, modelo_veiculo, ano_inicio, ano_fim, 
+       quantidade, preco, status) 
+      VALUES ?`;
+
+    await db.query(sql, [values]);
+    res.json({ message: `${products.length} itens importados com sucesso!` });
+  } catch (error) {
+    console.error("ERRO BULK IMPORT:", error);
+    res.status(500).json({ error: "Erro ao processar importação em massa." });
+  }
+});
+
 
 app.get("/api/store/products/:userId", async (req, res) => {
     try {
-        const [rows] = await db.execute("SELECT * FROM PRODUTOS WHERE id_loja = ?", [req.params.userId]);
+        const [rows] = await db.execute("SELECT * FROM PRODUTOS WHERE id_loja = ? ORDER BY data_atualizacao DESC", [req.params.userId]);
         res.json(rows);
     } catch (error) {
         res.status(500).json({ message: "Erro ao carregar estoque" });
     }
 });
 
-// FIX FINAL: Ordem sincronizada e tratamento de fotos LONGTEXT/Base64
+// POST: Cadastro Manual com Categoria dinâmica e UUID
 app.post("/api/store/products", async (req, res) => {
   const { 
-    user_id, nome_peca, fabricante, categoria, 
-    codigo_interno, aplicacao_veiculo, marca_veiculo, 
-    modelo_veiculo, ano_inicio, ano_fim, quantidade, 
-    preco, fotos, condicao 
+    nome_peca, fabricante, categoria, 
+    marca_veiculo, modelo_veiculo, ano_inicio, ano_fim, 
+    quantidade, preco, fotos, condicao, user_id, codigo_interno, aplicacao_veiculo
   } = req.body;
 
-  const id_produto = uuidv4(); 
-
   try {
-    // Sanitização para Base64: se for string curta ou inválida, vai como NULL
-    const fotoData = fotos && fotos.length > 15 ? fotos : null;
+    const id = uuidv4();
+    const query = `
+      INSERT INTO PRODUTOS 
+      (id_produto, id_loja, nome_peca, fabricante, categoria, codigo_interno, aplicacao_veiculo,
+       marca_veiculo, modelo_veiculo, ano_inicio, ano_fim, quantidade, preco, fotos, condicao, status) 
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')`;
 
-    await db.execute(
-      `INSERT INTO PRODUTOS 
-      (id_produto, id_loja, nome_peca, fabricante, categoria, codigo_interno, aplicacao_veiculo, marca_veiculo, modelo_veiculo, ano_inicio, ano_fim, quantidade, preco, fotos, status, condicao) 
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
-      [
-        id_produto, user_id, nome_peca, fabricante, categoria, 
-        codigo_interno || null, aplicacao_veiculo || null, 
-        marca_veiculo, modelo_veiculo, Number(ano_inicio), Number(ano_fim), 
-        Number(quantidade), Number(preco), fotoData, condicao || 'nova'
-      ]
-    );
-    res.status(201).json({ message: "Produto cadastrado!" });
+    await db.execute(query, [
+      id, user_id, nome_peca, fabricante, categoria, codigo_interno || null, aplicacao_veiculo || null,
+      marca_veiculo, modelo_veiculo, Number(ano_inicio), Number(ano_fim), 
+      Number(quantidade), Number(preco), fotos, condicao
+    ]);
+
+    res.json({ message: "Peça adicionada com sucesso!", id_produto: id });
   } catch (error) {
-    console.error("ERRO NO POST:", error);
-    res.status(500).json({ error: "Erro ao inserir produto. Verifique se a coluna fotos é LONGTEXT." });
+    console.error("ERRO CADASTRO:", error);
+    res.status(500).json({ error: "Erro ao cadastrar produto." });
   }
 });
 
+// PUT: Atualização Completa com Reset de Bloqueio
 app.put("/api/store/products/:id", async (req, res) => {
   const { id } = req.params;
   const { 
@@ -217,7 +286,6 @@ app.put("/api/store/products/:id", async (req, res) => {
   try {
     const fotoData = fotos && fotos.length > 15 ? fotos : null;
 
-    // Resetamos o status para 'active' e limpamos o motivo ao editar
     const query = `
       UPDATE PRODUTOS SET 
         nome_peca = ?, fabricante = ?, categoria = ?, codigo_interno = ?, 
@@ -233,10 +301,10 @@ app.put("/api/store/products/:id", async (req, res) => {
       Number(preco), fotoData, condicao || 'nova', id
     ]);
 
-    res.json({ message: "Produto atualizado e enviado para nova revisão!" });
+    res.json({ message: "Produto atualizado e enviado para revisão!" });
   } catch (error) {
     console.error("ERRO NO UPDATE:", error);
-    res.status(500).json({ error: "Erro ao atualizar no banco de dados." });
+    res.status(500).json({ error: "Erro ao atualizar produto." });
   }
 });
 
@@ -271,4 +339,5 @@ app.get("/api/store/metrics/:userId", async (req, res) => {
   }
 });
 
-app.listen(3001, () => console.log("Acheii Pro 3.6 - Servidor Otimizado para Imagens (Base64)"));
+const PORT = 3001;
+app.listen(PORT, () => console.log(`Acheii Pro 3.7 - ERP Lite Online na porta ${PORT}`));
