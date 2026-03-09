@@ -217,12 +217,13 @@ app.put("/api/store/products/:id", async (req, res) => {
   try {
     const fotoData = fotos && fotos.length > 15 ? fotos : null;
 
+    // Resetamos o status para 'active' e limpamos o motivo ao editar
     const query = `
       UPDATE PRODUTOS SET 
         nome_peca = ?, fabricante = ?, categoria = ?, codigo_interno = ?, 
         aplicacao_veiculo = ?, marca_veiculo = ?, modelo_veiculo = ?, 
         ano_inicio = ?, ano_fim = ?, quantidade = ?, preco = ?, 
-        fotos = ?, condicao = ?
+        fotos = ?, condicao = ?, status = 'active', motivo_bloqueio = NULL
       WHERE id_produto = ?`;
 
     await db.execute(query, [
@@ -232,7 +233,7 @@ app.put("/api/store/products/:id", async (req, res) => {
       Number(preco), fotoData, condicao || 'nova', id
     ]);
 
-    res.json({ message: "Produto atualizado!" });
+    res.json({ message: "Produto atualizado e enviado para nova revisão!" });
   } catch (error) {
     console.error("ERRO NO UPDATE:", error);
     res.status(500).json({ error: "Erro ao atualizar no banco de dados." });
