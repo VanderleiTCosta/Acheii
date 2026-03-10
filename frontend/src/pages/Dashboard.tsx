@@ -1,175 +1,250 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Box, AlertTriangle, MessageSquare, TrendingUp, Loader2, AlertCircle, ArrowRight, Clock } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
-import axios from 'axios';
-import Sidebar from '../components/Sidebar';
+import React, { useState, useEffect, useCallback } from "react";
+import {
+  Box, AlertTriangle, MessageSquare, TrendingUp, Loader2, 
+  AlertCircle, ArrowRight, Clock, Activity, User, Bot, Flame,
+} from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import axios from "axios";
+import Sidebar from "../components/Sidebar";
 
-// Interfaces robustas para tipagem estática (Zero ESLint Errors)
 interface Metrics {
-    active: number;
-    stockAlert: number;
-    chatRequests: number;
-    conversion: string;
+  active: number;
+  stockAlert: number;
+  chatRequests: number;
+  conversion: string;
 }
 
 interface RejectedProduct {
-    id_produto: string; // Sincronizado com UUID do banco
-    nome_peca: string;
-    status: string;
-    motivo_bloqueio: string; // Lendo do novo campo dedicado
+  id_produto: string;
+  nome_peca: string;
+  status: string;
+  motivo_bloqueio: string;
+}
+
+interface ChatLog {
+  id: number;
+  user_message: string;
+  bot_response: string;
+  created_at: string;
+}
+
+interface TopSearch {
+  term: string;
+  count: number;
 }
 
 interface MetricCardProps {
-    icon: React.ReactNode;
-    label: string;
-    value: string | number;
-    trend: string;
-    danger?: boolean;
+  icon: React.ReactNode;
+  label: string;
+  value: string | number;
+  trend: string;
+  danger?: boolean;
 }
 
 const Dashboard = () => {
-    const [metrics, setMetrics] = useState<Metrics>({
-        active: 0,
-        stockAlert: 0,
-        chatRequests: 0,
-        conversion: "0%"
-    });
-    const [rejectedItems, setRejectedItems] = useState<RejectedProduct[]>([]);
-    const [loading, setLoading] = useState(true);
-    const navigate = useNavigate();
+  const [metrics, setMetrics] = useState<Metrics>({
+    active: 0, stockAlert: 0, chatRequests: 0, conversion: "0%",
+  });
+  const [rejectedItems, setRejectedItems] = useState<RejectedProduct[]>([]);
+  const [recentChats, setRecentChats] = useState<ChatLog[]>([]);
+  const [topSearches, setTopSearches] = useState<TopSearch[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const navigate = useNavigate();
 
-    const user = JSON.parse(localStorage.getItem('@Acheii:user') || '{"id": "", "name": "Lojista"}');
+  const user = JSON.parse(localStorage.getItem("@Acheii:user") || '{"id": "", "name": "Usuário"}');
 
-    const fetchDashboardData = useCallback(async () => {
-        if (!user.id) return;
-        try {
-            setLoading(true);
-            // Chamadas em paralelo para performance máxima
-            const [metricsRes, productsRes] = await Promise.all([
-                axios.get(`http://localhost:3001/api/store/metrics/${user.id}`),
-                axios.get(`http://localhost:3001/api/store/products/${user.id}`)
-            ]);
+  // FUNÇÃO MASTER OTIMIZADA: Agora recebe tudo de um único endpoint processado no servidor
+  const fetchDashboardData = useCallback(async (isSilent = false) => {
+    if (!user.id) return;
+    try {
+        if (!isSilent) setLoading(true);
+        setIsSyncing(true);
 
-            setMetrics(metricsRes.data);
-            
-            // Filtra itens com status 'rejected' para exibir no topo
-            const rejected = productsRes.data.filter((p: RejectedProduct) => p.status === 'rejected');
-            setRejectedItems(rejected);
-        } catch (error) {
-            console.error("Erro ao carregar ecossistema:", error);
-        } finally {
-            setLoading(false);
-        }
-    }, [user.id]);
+        // Chamada única otimizada para o backend
+        const res = await axios.get(`http://localhost:3001/api/store/dashboard-summary/${user.id}`);
+        
+        const { 
+            metrics: metricsData, 
+            recentChats: chatsData, 
+            topSearches: searchesData, 
+            rejectedProducts 
+        } = res.data;
 
-    useEffect(() => {
-        fetchDashboardData();
-    }, [fetchDashboardData]);
+        // SOLUÇÃO DO ERRO: Usando atualização funcional para evitar dependência do ESLint
+        setMetrics(prevMetrics => metricsData || prevMetrics);
+        
+        setRecentChats(chatsData || []);
+        setTopSearches(searchesData || []);
+        setRejectedItems(rejectedProducts || []);
 
-    return (
-        <div className="flex h-screen bg-slate-50 overflow-hidden font-sans text-brand-dark">
-            <Sidebar role="user" />
+    } catch (error) {
+        console.error("Erro na carga instantânea do Dashboard:", error);
+    } finally {
+        setLoading(false);
+        setIsSyncing(false);
+    }
+}, [user.id]);
 
-            <main className="flex-1 p-8 overflow-y-auto">
-                <header className="flex justify-between items-center mb-10">
-                    <div>
-                        <h1 className="text-3xl font-black tracking-tighter uppercase leading-none">Painel de Performance</h1>
-                        <p className="text-slate-500 font-medium mt-1 uppercase text-xs tracking-widest">Lojista: {user.name}</p>
-                    </div>
-                    <div className="bg-brand-dark text-brand-primary px-5 py-2.5 rounded-2xl text-[10px] font-black uppercase flex items-center gap-2 shadow-lg">
-                        <div className="w-2 h-2 bg-brand-primary rounded-full animate-pulse"></div>
-                        Otto AI: Sistema Ativo
-                    </div>
-                </header>
+  useEffect(() => {
+    fetchDashboardData();
+    // Polling de 10 segundos agora é seguro pois a carga é mínima
+    const interval = setInterval(() => fetchDashboardData(true), 10000);
+    return () => clearInterval(interval);
+  }, [fetchDashboardData]);
 
-                {loading ? (
-                    <div className="flex flex-col items-center justify-center py-40">
-                        <Loader2 className="animate-spin text-brand-primary mb-4" size={40} />
-                        <p className="text-[10px] font-black uppercase text-slate-400 tracking-[0.2em]">Sincronizando sua Loja...</p>
-                    </div>
-                ) : (
-                    <>
-                        {/* ALERTAS DE BLOQUEIO - Utilizando o novo campo 'motivo_bloqueio' */}
-                        {rejectedItems.length > 0 && (
-                            <div className="mb-10 space-y-4 animate-in fade-in slide-in-from-top-4 duration-500">
-                                {rejectedItems.map(item => (
-                                    <div key={item.id_produto} className="bg-white border-2 border-red-50 p-6 rounded-[2.5rem] flex items-center justify-between shadow-sm hover:border-red-100 transition-all group">
-                                        <div className="flex items-center gap-6">
-                                            <div className="bg-red-50 text-red-500 p-4 rounded-2xl group-hover:scale-105 transition-transform">
-                                                <AlertCircle size={28} />
-                                            </div>
-                                            <div>
-                                                <h4 className="font-black uppercase text-sm text-brand-dark leading-none mb-2">Item Bloqueado: {item.nome_peca}</h4>
-                                                <p className="text-red-500 text-[10px] font-black uppercase tracking-widest bg-red-50/50 px-2 py-1 rounded w-fit mb-2">Ação Administrativa</p>
-                                                <p className="text-slate-500 text-xs font-bold leading-relaxed max-w-xl">
-                                                    Motivo: <span className="text-brand-dark">"{item.motivo_bloqueio || 'Verifique as especificações técnicas da peça e tente novamente.'}"</span>
-                                                </p>
-                                            </div>
-                                        </div>
-                                        <button 
-                                            onClick={() => navigate('/estoque')}
-                                            className="flex items-center gap-2 bg-red-500 text-white px-8 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl hover:bg-red-600 active:scale-95 transition-all"
-                                        >
-                                            Corrigir Item <ArrowRight size={14} />
-                                        </button>
-                                    </div>
-                                ))}
-                            </div>
-                        )}
+  return (
+    <div className="flex h-screen bg-slate-50 overflow-hidden font-sans text-brand-dark">
+      <Sidebar role="user" />
 
-                        {/* Grid de Métricas Principais */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
-                            <MetricCard icon={<Box className="text-blue-500"/>} label="Peças Ativas" value={metrics.active} trend="+12%" />
-                            <MetricCard icon={<AlertTriangle className="text-red-500"/>} label="Estoque Baixo" value={metrics.stockAlert} trend="Alerta" danger />
-                            <MetricCard icon={<MessageSquare className="text-emerald-500"/>} label="Leads Chat" value={metrics.chatRequests} trend="+8" />
-                            <MetricCard icon={<TrendingUp className="text-purple-500"/>} label="Conversão" value={metrics.conversion} trend="+2.4%" />
+      <main className="flex-1 p-8 overflow-y-auto custom-scrollbar">
+        {loading ? (
+          <div className="flex h-full items-center justify-center">
+            <div className="text-center">
+              <Loader2 className="animate-spin text-brand-primary mb-4 mx-auto" size={48} />
+              <p className="text-[10px] font-black uppercase tracking-[0.3em] text-slate-400">Otto AI Carregando Instantaneamente...</p>
+            </div>
+          </div>
+        ) : (
+          <>
+            <header className="mb-10 flex justify-between items-end">
+              <div>
+                <h1 className="text-4xl font-black uppercase tracking-tighter leading-none">Dashboard</h1>
+                <p className="text-slate-500 font-medium text-sm mt-2 uppercase tracking-widest italic">Otto AI monitorando sua loja: {user.name}</p>
+              </div>
+              <div className="text-right hidden md:block">
+                <div className={`flex items-center gap-2 font-bold text-xs transition-colors ${isSyncing ? 'text-brand-primary' : 'text-emerald-500'}`}>
+                  <div className={`w-2 h-2 rounded-full ${isSyncing ? 'bg-brand-primary animate-spin' : 'bg-emerald-500 animate-ping'}`} />
+                  {isSyncing ? 'Sincronizando...' : 'Online e Sincronizado'}
+                </div>
+              </div>
+            </header>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+              <MetricCard icon={<Box size={20} />} label="Itens Ativos" value={metrics.active} trend="+12%" />
+              <MetricCard icon={<AlertTriangle size={20} />} label="Stock Baixo" value={metrics.stockAlert} trend="Ação" danger={metrics.stockAlert > 0} />
+              <MetricCard icon={<MessageSquare size={20} />} label="Conversas Otto" value={metrics.chatRequests} trend="Live" />
+              <MetricCard icon={<TrendingUp size={20} />} label="Conversão" value={metrics.conversion} trend="+5.4%" />
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-10">
+              {/* FEED EM TEMPO REAL */}
+              <div className="lg:col-span-2 bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col h-[450px] relative overflow-hidden group">
+                <div className="flex justify-between items-center mb-8 relative z-10">
+                  <div>
+                    <h3 className="text-xl font-black uppercase tracking-tighter text-brand-dark flex items-center gap-2">
+                      <Activity size={20} className="text-brand-primary" /> Atividade em Tempo Real
+                    </h3>
+                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Logs de interação do WhatsApp</p>
+                  </div>
+                  <button onClick={() => navigate("/monitoramento-ia")} className="text-[10px] font-black uppercase text-brand-primary bg-brand-primary/10 px-5 py-2 rounded-full hover:bg-brand-primary hover:text-brand-dark transition-all shadow-sm">
+                    Monitoramento Full
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto space-y-4 pr-2 relative z-10 custom-scrollbar">
+                  {recentChats.map((chat) => (
+                    <div key={chat.id} className="bg-slate-50 p-6 rounded-[2.5rem] border border-slate-100 hover:border-brand-primary/30 transition-all">
+                      <div className="flex justify-between items-center mb-4">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 bg-white rounded-xl shadow-sm text-slate-400"><User size={14} /></div>
+                          <span className="text-[11px] font-black text-slate-500 uppercase italic truncate max-w-[200px]">"{chat.user_message}"</span>
                         </div>
+                        <span className="text-[9px] font-bold text-slate-300 uppercase flex items-center gap-1">
+                          <Clock size={10} /> {new Date(chat.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                      </div>
+                      <div className="flex items-start gap-3 bg-brand-dark p-5 rounded-[2rem] shadow-xl border border-white/5">
+                        <Bot size={18} className="text-brand-primary shrink-0 mt-1" />
+                        <p className="text-[12px] text-brand-primary font-bold leading-relaxed">{chat.bot_response}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
 
-                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                            {/* Gráfico/Placeholder de Performance */}
-                            <div className="lg:col-span-2 bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col items-center justify-center text-center h-80 relative overflow-hidden group">
-                                <div className="bg-slate-50 p-8 rounded-full mb-4 group-hover:scale-110 transition-transform duration-500">
-                                    <TrendingUp size={48} className="text-slate-200" />
-                                </div>
-                                <h3 className="text-lg font-black uppercase tracking-tighter text-brand-dark">Análise Otto AI</h3>
-                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] mt-2">Dados em tempo real do Marketplace</p>
-                                <div className="absolute top-0 right-0 p-8">
-                                    <Clock className="text-slate-100 w-32 h-32 -mr-10 -mt-10 opacity-50" />
-                                </div>
-                            </div>
+              {/* MAIS PROCURADOS */}
+              <div className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col h-[450px]">
+                <div className="mb-8">
+                  <h3 className="text-xl font-black uppercase tracking-tighter text-brand-dark flex items-center gap-2">
+                    <Flame size={20} className="text-orange-500" /> Mais Procurados
+                  </h3>
+                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">O que os clientes querem comprar</p>
+                </div>
+                <div className="space-y-3 flex-1 overflow-y-auto custom-scrollbar">
+                  {topSearches.map((search, index) => (
+                    <div key={index} className="flex justify-between items-center p-5 bg-slate-50 rounded-[2rem] border border-slate-100 group hover:bg-brand-dark transition-all duration-500">
+                      <div className="flex items-center gap-4">
+                        <span className={`text-sm font-black ${index === 0 ? "text-brand-primary" : "text-slate-300"} group-hover:text-brand-primary`}>#{index + 1}</span>
+                        <span className="text-xs font-black uppercase text-slate-600 group-hover:text-white truncate max-w-[140px]">{search.term}</span>
+                      </div>
+                      <div className="bg-white px-4 py-1.5 rounded-full shadow-sm group-hover:bg-brand-primary">
+                        <span className="text-[10px] font-black text-brand-dark uppercase">{search.count}x</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
 
-                            {/* Card de Chamada para Ação IA */}
-                            <div className="bg-brand-dark p-10 rounded-[3rem] shadow-2xl flex flex-col justify-between text-white relative overflow-hidden group">
-                                <div className="relative z-10">
-                                    <div className="w-12 h-12 bg-brand-primary rounded-2xl flex items-center justify-center mb-6 shadow-lg shadow-brand-primary/20">
-                                        <MessageSquare className="text-brand-dark" size={24} />
-                                    </div>
-                                    <h2 className="text-3xl font-black uppercase tracking-tighter mb-4 leading-tight">Otto AI Automação</h2>
-                                    <p className="text-slate-400 text-sm font-medium leading-relaxed mb-8">Sua loja responde clientes 24h por dia buscando o melhor preço automaticamente.</p>
-                                    <button className="w-full bg-brand-primary text-brand-dark py-4 rounded-2xl font-black uppercase text-xs tracking-widest hover:brightness-110 active:scale-95 transition-all shadow-xl">Configurar Chat</button>
-                                </div>
-                                <div className="absolute -bottom-10 -right-10 w-48 h-48 bg-brand-primary/5 rounded-full blur-3xl group-hover:bg-brand-primary/10 transition-all duration-700"></div>
-                            </div>
+            {/* Alertas Críticos */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+              <div className="lg:col-span-2">
+                {rejectedItems.length > 0 && (
+                  <section className="animate-in fade-in slide-in-from-bottom-6 duration-1000">
+                    <div className="flex items-center gap-3 mb-6">
+                      <div className="p-2 bg-red-100 text-red-600 rounded-lg"><AlertCircle size={20} /></div>
+                      <h2 className="text-xl font-black uppercase tracking-tighter text-brand-dark">Ações Necessárias</h2>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {rejectedItems.map((item) => (
+                        <div key={item.id_produto} className="bg-white p-7 rounded-[2.5rem] border-l-8 border-red-500 border shadow-sm flex justify-between items-center group hover:-translate-y-1 transition-all">
+                          <div className="max-w-[80%]">
+                            <h4 className="font-bold text-sm uppercase text-brand-dark truncate">{item.nome_peca}</h4>
+                            <p className="text-[11px] text-red-500 font-bold mt-2 italic">"{item.motivo_bloqueio}"</p>
+                          </div>
+                          <button onClick={() => navigate("/estoque")} className="p-4 bg-slate-50 text-slate-400 rounded-2xl group-hover:bg-brand-dark group-hover:text-brand-primary transition-all shadow-sm">
+                            <ArrowRight size={20} />
+                          </button>
                         </div>
-                    </>
+                      ))}
+                    </div>
+                  </section>
                 )}
-            </main>
-        </div>
-    );
+              </div>
+
+              <div className="bg-brand-dark p-10 rounded-[3.5rem] shadow-2xl flex flex-col justify-between text-white relative overflow-hidden group">
+                <div className="relative z-10">
+                  <div className="w-14 h-14 bg-brand-primary rounded-2xl flex items-center justify-center mb-8 shadow-xl shadow-brand-primary/20 group-hover:rotate-12 transition-transform duration-500">
+                    <MessageSquare className="text-brand-dark" size={28} />
+                  </div>
+                  <h2 className="text-4xl font-black uppercase tracking-tighter mb-6 leading-[0.9]">Atendimento<br />Automático</h2>
+                  <p className="text-slate-400 text-sm font-medium leading-relaxed mb-10">Otto AI processou <span className="text-brand-primary font-black">{metrics.chatRequests}</span> leads hoje.</p>
+                  <button onClick={() => navigate("/monitoramento-ia")} className="w-full bg-brand-primary text-brand-dark py-6 rounded-[1.5rem] font-black uppercase text-xs tracking-[0.2em] hover:brightness-110 active:scale-95 transition-all shadow-2xl flex items-center justify-center gap-3">
+                    Analisar Conversas <ArrowRight size={18} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+      </main>
+    </div>
+  );
 };
 
-// Subcomponente de Métricas com Design Premium
+// Subcomponente de Métrica Premium
 const MetricCard = ({ icon, label, value, trend, danger = false }: MetricCardProps) => (
-    <div className="bg-white p-7 rounded-[2.5rem] shadow-sm border border-slate-100 flex flex-col gap-6 hover:shadow-md transition-all group cursor-default">
-        <div className="flex justify-between items-start">
-            <div className="bg-slate-50 p-4 rounded-2xl group-hover:bg-brand-primary/10 transition-colors duration-300">{icon}</div>
-            <span className={`text-[9px] font-black px-3 py-1.5 rounded-full uppercase tracking-wider ${danger ? 'bg-red-50 text-red-500' : 'bg-emerald-50 text-emerald-600'}`}>{trend}</span>
-        </div>
-        <div>
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{label}</p>
-            <h3 className="text-4xl font-black tracking-tighter text-brand-dark leading-none">{value}</h3>
-        </div>
+  <div className="bg-white p-8 rounded-[3rem] shadow-sm border border-slate-100 flex flex-col gap-8 hover:shadow-xl transition-all duration-500 group relative overflow-hidden text-left">
+    <div className="flex justify-between items-start relative z-10">
+      <div className="bg-slate-50 p-4 rounded-2xl group-hover:bg-brand-primary group-hover:text-brand-dark transition-all text-slate-400">{icon}</div>
+      <span className={`text-[10px] font-black px-4 py-1.5 rounded-full uppercase tracking-widest ${danger ? "bg-red-50 text-red-500" : "bg-emerald-50 text-emerald-600"}`}>{trend}</span>
     </div>
+    <div className="relative z-10">
+      <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-2">{label}</p>
+      <h3 className="text-4xl font-black text-brand-dark tracking-tighter">{value}</h3>
+    </div>
+  </div>
 );
 
 export default Dashboard;
